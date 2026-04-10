@@ -314,7 +314,7 @@ with col2:
                 
             try:
                 pattern = re.compile(pattern_str, re.IGNORECASE)
-                repl = f'<mark style="background-color: {bg}; color: inherit; padding: 2px 4px; border-radius: 4px; {border}">\g<0></mark>'
+                repl = f'<mark style="background-color: {bg}; color: inherit; padding: 2px 4px; border-radius: 4px; {border}">\\g<0></mark>'
                 escaped_text = pattern.sub(repl, escaped_text)
             except Exception as e:
                 pass
