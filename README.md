@@ -1,6 +1,6 @@
-# AI Billing Rule Extraction Pipeline 🩺
+# AI Billing Rule Extraction Pipeline 🏥
 
-Extracts medical billing rules in formal, machine-usable form from PDFs, such as the NCCI policy.
+Extract medical billing rules in formal, machine-usable form from PDFs, such as the NCCI policy.
 
 Proof of Concept, code is messy.
 
@@ -18,11 +18,11 @@ uv run streamlit run frontend.py
 
 ## Pipeline Steps
 
-1. **Extract**: Parse the PDF into raw text.
-2. **Structured Generation**: Use LLM with structured outputs to generate a flattened JSON AST. (Flattened representations avoid generation errors common with complex recursive schemas).
-3. **Transform**: Process the flat JSON AST into the application's required format.
+1. Extraction: Parse the PDF into raw text (no AI/OCR needed for NCCI, but could be nice addition for more complex documents).
+2. Use LLM with constrained generation to generate a flattened JSON AST. (Flattened representation avoids generation errors common with complex/recursive schemas).
+3. Transform the generated flat-AST into a more standard (recursive) format and display it to the user. 
 
-In the streamlit frontend, a human can easily review the extracted rules.
+The rules are displayed next to the PDF and extracted text in the frontend for easy human review.
 
 ## Production Improvements
 
