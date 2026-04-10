@@ -32,7 +32,7 @@ You can either upload PDFs in the frontend, or use the preconfigured NCCI ones. 
 
 The rules are displayed next to the PDF and extracted text in the frontend for easy human review.
 
-## Production Improvements
+## Improvements
 
 Currently, the system sometimes extracts text descriptions (e.g., "endoscopy") instead of standardized billing codes. To be production-ready, it needs integration with external classification databases e.g. to map procedures to CPT codes and diagnoses to ICD codes.
 
