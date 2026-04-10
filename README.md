@@ -10,11 +10,19 @@ https://github.com/user-attachments/assets/acb183ed-5907-4d53-bbaf-df24d6304520
 
 ## Run
 
-Launch the frontend to upload PDFs:
+Start Postgres (used for saving extracted rules):
+
+```bash
+docker-compose up -d
+```
+
+Then, launch the frontend:
 
 ```bash
 uv run streamlit run frontend.py
 ```
+
+You can either upload PDFs in the frontend, or use the preconfigured NCCI ones. Then click "Run Extraction Analysis" to trigger the pipeline.
 
 ## Pipeline Steps
 
