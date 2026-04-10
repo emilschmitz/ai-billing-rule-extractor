@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: validator
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: rules_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U validator -d rules_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://validator:password@postgres:5432/rules_db
+      - SYNC_DATABASE_URL=postgresql://validator:password@postgres:5432/rules_db
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Not containerizing streamlit or pipeline run, assuming they are run by user with `uv run` as per constraints
+  # wait, user constraint: "Provide a complete `docker-compose.yml` for Postgres and the FastAPI app, including table init scripts."
+
+volumes:
+  db_data:
