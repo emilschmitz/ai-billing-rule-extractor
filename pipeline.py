@@ -64,6 +64,9 @@ class RuleNode(BaseModel):
     operator: Literal['==', '!=', '>', '<', 'in', 'not in', ''] = Field(description="Empty string for logic nodes")
     value: Union[str, List[str]] = Field(description="String or list of strings. Empty string for logic nodes")
     citation: str = Field(description="Verbatim exact match substring from chunk")
+    description: str = Field(default="", description="Short 3-4 word understandable description as headline for the rule. Do not mock.")
+    page_number: str = Field(default="", description="The exact page number of the citation, e.g. '18'")
+    line_number: str = Field(default="", description="The estimated line number of the citation on that page")
 
 class ExtractionResult(BaseModel):
     rules: List[RuleNode]
@@ -80,11 +83,15 @@ class RuleSyntheticTests(BaseModel):
 
 SYSTEM_PROMPT = """You are an expert RCM Encounter Validation system builder.
 You parse convoluted medical rules into a config-driven flat AST array.
+You MUST return a flat array (List) of RuleNode objects. Do not nest objects. To represent complex nested AST logic, use the `parent_id` field to point child nodes to their parent logic node's `id`. Every rule tree must start with a root node where parent_id is null.
 The AST uses nodes. `type` is AND, OR, or CONDITION.
 For logic nodes (AND/OR), `field`, `operator`, `value` must be empty strings.
 For CONDITION nodes, `field` uses JSONPath-like notation targeting the Candid Health Encounter schema, e.g., 'service_lines[].procedure_code' or 'diagnoses[].code'.
 `operator` must be in ['==', '!=', '>', '<', 'in', 'not in'].
 The `citation` MUST be a verbatim exact-match substring from the ORIGINAL CHUNK provided. This is absolutely critical for UI highlighting. DO NOT modify the text.
+
+CRITICAL LOGIC MAPPING:
+For Mutually Exclusive procedures (e.g. "Do not report code X and Y together"), you must NOT use a single condition `not in [X, Y]` because that bans both codes entirely. You must use De Morgan's laws: create an `OR` logic node with two `CONDITION` children asserting `not in` for each code separately. (Meaning: The encounter must either NOT have X, OR NOT have Y).
 
 Here are few-shot examples for structured extraction.
 
@@ -92,23 +99,32 @@ Example 1: Single condition rule
 Chunk text: "...If procedure code 99214 is billed, the claim requires place of service 11..."
 AST:
 [
-  { "id": "uuid-1", "parent_id": null, "type": "CONDITION", "field": "place_of_service_code", "operator": "==", "value": "11", "citation": "procedure code 99214 is billed, the claim requires place of service 11" }
+  { "id": "uuid-1", "parent_id": null, "type": "CONDITION", "field": "place_of_service_code", "operator": "==", "value": "11", "citation": "procedure code 99214 is billed, the claim requires place of service 11", "description": "POS 11 Requirement", "page_number": "18", "line_number": "5" }
 ]
 
 Example 2: Complex AND/OR logic
-Chunk text: "...To bill for telehealth, the modifier must be 95 or GQ, and the POS cannot be 02..."
+Chunk text: "[PAGE 20]\n...To bill for telehealth, the modifier must be 95 or GQ, and the POS cannot be 02..."
 AST:
 [
-  { "id": "uuid-logic", "parent_id": null, "type": "AND", "field": "", "operator": "", "value": "", "citation": "To bill for telehealth, the modifier must be 95 or GQ, and the POS cannot be 02" },
-  { "id": "uuid-cond-1", "parent_id": "uuid-logic", "type": "CONDITION", "field": "service_lines[].modifiers", "operator": "in", "value": ["95", "GQ"], "citation": "modifier must be 95 or GQ" },
-  { "id": "uuid-cond-2", "parent_id": "uuid-logic", "type": "CONDITION", "field": "place_of_service_code", "operator": "!=", "value": "02", "citation": "POS cannot be 02" }
+  { "id": "uuid-logic", "parent_id": null, "type": "AND", "field": "", "operator": "", "value": "", "citation": "To bill for telehealth, the modifier must be 95 or GQ, and the POS cannot be 02", "description": "Telehealth Requirements", "page_number": "20", "line_number": "3" },
+  { "id": "uuid-cond-1", "parent_id": "uuid-logic", "type": "CONDITION", "field": "service_lines[].modifiers", "operator": "in", "value": ["95", "GQ"], "citation": "modifier must be 95 or GQ", "description": "Telehealth Modifiers", "page_number": "20", "line_number": "4" },
+  { "id": "uuid-cond-2", "parent_id": "uuid-logic", "type": "CONDITION", "field": "place_of_service_code", "operator": "!=", "value": "02", "citation": "POS cannot be 02", "description": "Telehealth POS Exclusion", "page_number": "20", "line_number": "4" }
 ]
 
 Example 3: Modifier exclusion
-Chunk text: "...Modifiers 25 and 59 should not be reported on the same diagnosis line..."
+Chunk text: "[PAGE 24]\n...Modifiers 25 and 59 should not be reported on the same diagnosis line..."
 AST:
 [
-  { "id": "uuid-cond-3", "parent_id": null, "type": "CONDITION", "field": "service_lines[].modifiers", "operator": "not in", "value": ["25", "59"], "citation": "Modifiers 25 and 59 should not be reported" }
+  { "id": "uuid-cond-3", "parent_id": null, "type": "CONDITION", "field": "service_lines[].modifiers", "operator": "not in", "value": ["25", "59"], "citation": "Modifiers 25 and 59 should not be reported", "description": "Modifier Exclusion", "page_number": "24", "line_number": "10" }
+]
+
+Example 4: Mutually exclusive procedures (Do not report together)
+Chunk text: "[PAGE 21]\n...provider shall not report CPT code 58260 plus CPT code 58720 together..."
+AST:
+[
+  { "id": "uuid-logic-or", "parent_id": null, "type": "OR", "field": "", "operator": "", "value": "", "citation": "shall not report CPT code 58260 plus CPT code 58720 together", "description": "Mutually Exclusive Procs", "page_number": "21", "line_number": "5" },
+  { "id": "uuid-cond-4", "parent_id": "uuid-logic-or", "type": "CONDITION", "field": "service_lines[].procedure_code", "operator": "not in", "value": ["58260"], "citation": "shall not report CPT code 58260", "description": "Code 1 Exclusion", "page_number": "21", "line_number": "5" },
+  { "id": "uuid-cond-5", "parent_id": "uuid-logic-or", "type": "CONDITION", "field": "service_lines[].procedure_code", "operator": "not in", "value": ["58720"], "citation": "plus CPT code 58720 together", "description": "Code 2 Exclusion", "page_number": "21", "line_number": "5" }
 ]
 """
 
@@ -158,7 +174,7 @@ def clear_database():
         print("Clearing existing data...")
         conn.execute(text("TRUNCATE TABLE test_encounters, rule_nodes CASCADE;"))
 
-def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_callback=None):
+def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_callback=None, run_name="Default Run"):
     chunks = chunk_pages_text(pages, chunk_size=chunk_size, overlap=overlap)
 
     for i, chunk in enumerate(chunks):
@@ -199,8 +215,8 @@ def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_
             for node in rules:
                 val = json.dumps(node.value) if isinstance(node.value, list) else json.dumps(node.value)
                 query = text("""
-                    INSERT INTO rule_nodes (id, parent_id, node_type, field_name, operator, node_value, citation)
-                    VALUES (:id, :parent_id, :node_type, :field_name, :operator, :node_value, :citation)
+                    INSERT INTO rule_nodes (id, parent_id, node_type, field_name, operator, node_value, citation, description, page_number, line_number, run_name)
+                    VALUES (:id, :parent_id, :node_type, :field_name, :operator, :node_value, :citation, :description, :page_number, :line_number, :run_name)
                 """)
                 conn.execute(query, {
                     "id": node.id,
@@ -209,7 +225,11 @@ def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_
                     "field_name": node.field,
                     "operator": node.operator,
                     "node_value": val,
-                    "citation": node.citation
+                    "citation": node.citation,
+                    "description": node.description,
+                    "page_number": node.page_number,
+                    "line_number": node.line_number,
+                    "run_name": run_name
                 })
             
             # Insert tests targeted at the first root of the chunk
@@ -217,14 +237,14 @@ def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_
                 target_rule_id = roots[0].id
                 for t in tests.passes:
                     conn.execute(text("""
-                        INSERT INTO test_encounters (encounter_json, target_rule_id, expected_to_pass)
-                        VALUES (:json, :rule_id, TRUE)
-                    """), {"json": json.dumps(t.model_dump()), "rule_id": target_rule_id})
+                        INSERT INTO test_encounters (encounter_json, target_rule_id, expected_to_pass, run_name)
+                        VALUES (:json, :rule_id, TRUE, :run_name)
+                    """), {"json": json.dumps(t.model_dump()), "rule_id": target_rule_id, "run_name": run_name})
                 for t in tests.fails:
                     conn.execute(text("""
-                        INSERT INTO test_encounters (encounter_json, target_rule_id, expected_to_pass)
-                        VALUES (:json, :rule_id, FALSE)
-                    """), {"json": json.dumps(t.model_dump()), "rule_id": target_rule_id})
+                        INSERT INTO test_encounters (encounter_json, target_rule_id, expected_to_pass, run_name)
+                        VALUES (:json, :rule_id, FALSE, :run_name)
+                    """), {"json": json.dumps(t.model_dump()), "rule_id": target_rule_id, "run_name": run_name})
 
 def main():
     print("Starting Pipeline...")

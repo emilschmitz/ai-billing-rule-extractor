@@ -2,6 +2,7 @@ import streamlit as st
 import json
 import html
 import os
+import re
 from sqlalchemy import create_engine, text
 import pipeline
 
@@ -87,12 +88,23 @@ def get_db_engine():
     return create_engine(DB_URL)
 
 @st.cache_data
-def load_db_data():
+def get_run_names():
     engine = get_db_engine()
     try:
         with engine.connect() as conn:
-            rules_res = conn.execute(text("SELECT * FROM rule_nodes")).mappings().fetchall()
-            tests_res = conn.execute(text("SELECT * FROM test_encounters")).mappings().fetchall()
+            runs = conn.execute(text("SELECT DISTINCT run_name FROM rule_nodes WHERE run_name IS NOT NULL ORDER BY run_name DESC")).fetchall()
+        return [r[0] for r in runs]
+    except Exception as e:
+        return []
+
+@st.cache_data
+def load_db_data(run_name):
+    if not run_name or run_name == "New/Empty": return [], []
+    engine = get_db_engine()
+    try:
+        with engine.connect() as conn:
+            rules_res = conn.execute(text("SELECT * FROM rule_nodes WHERE run_name = :r"), {"r": run_name}).mappings().fetchall()
+            tests_res = conn.execute(text("SELECT * FROM test_encounters WHERE run_name = :r"), {"r": run_name}).mappings().fetchall()
         return [dict(r) for r in rules_res], [dict(t) for t in tests_res]
     except Exception as e:
         st.error(f"Failed to connect to database. Make sure docker-compose is running. Error: {e}")
@@ -138,6 +150,19 @@ end_page = st.sidebar.number_input("End Page", min_value=1, value=10)
 chunk_size = st.sidebar.number_input("Analysis Chunk Size (pages)", min_value=1, value=3)
 overlap = st.sidebar.number_input("Overlap Pages", min_value=0, value=1)
 
+st.sidebar.markdown("---")
+available_runs = get_run_names()
+if 'selected_run_name' not in st.session_state:
+    st.session_state.selected_run_name = "New/Empty"
+
+options = ["New/Empty"] + available_runs
+idx = options.index(st.session_state.selected_run_name) if st.session_state.selected_run_name in options else 0
+
+selected_run = st.sidebar.selectbox("Past Extractions", options, index=idx)
+if selected_run != st.session_state.selected_run_name:
+    st.session_state.selected_run_name = selected_run
+    st.rerun()
+
 if st.sidebar.button("Run Extraction Analysis"):
     if not pdf_source:
         st.sidebar.error("No PDF selected!")
@@ -148,7 +173,10 @@ if st.sidebar.button("Run Extraction Analysis"):
         
         # Read the text for analysis
         pages = pipeline.read_pdf_pages(pdf_source, start_page=start_page, end_page=end_page)
-        pipeline.clear_database()
+        
+        from datetime import datetime
+        run_name = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (P{start_page}-{end_page})"
+        st.session_state.selected_run_name = run_name
         
         def update_progress(current, total, msg):
             # Calculate progress ratio
@@ -160,18 +188,20 @@ if st.sidebar.button("Run Extraction Analysis"):
             pages, 
             chunk_size=int(chunk_size), 
             overlap=int(overlap),
-            progress_callback=update_progress
+            progress_callback=update_progress,
+            run_name=run_name
         )
         
         progress_bar.progress(1.0)
         status_text.text("Done!")
         st.sidebar.success("Extraction Complete!")
         # Clear the cache so new rules and documents are reloaded
+        get_run_names.clear()
         load_db_data.clear()
         load_source_document.clear()
         st.rerun()
 
-rules_raw, tests_raw = load_db_data()
+rules_raw, tests_raw = load_db_data(st.session_state.selected_run_name)
 if pdf_source:
     raw_text, raw_pages = load_source_document(pdf_source, start_page, end_page)
 else:
@@ -205,23 +235,48 @@ with col1:
     if not ast_forest:
         st.info("No rules found in database. Please run an extraction analysis.")
         
-    def render_tree(node, depth=0):
-        indent = "&nbsp;" * (depth * 8)
+    def ast_to_logical_expression(node, depth=0):
+        indent = "    " * depth
         if node['node_type'] in ('AND', 'OR'):
-            st.markdown(f"{indent}**{node['node_type']}**", unsafe_allow_html=True)
-        else:
-            val = node['node_value']
-            st.markdown(f"{indent}- `{node['field_name']} {node['operator']} {val}`", unsafe_allow_html=True)
+            children_exprs = [ast_to_logical_expression(c, depth+1) for c in node.get('children', [])]
+            if not children_exprs:
+                return f"{indent}()"
             
-        for child in node['children']:
-            render_tree(child, depth+1)
+            if len(children_exprs) == 1:
+                return children_exprs[0]
+                
+            joiner = f"\n{indent}{node['node_type']} "
+            inner = joiner.join([c.lstrip() for c in children_exprs])
+            return f"{indent}(\n{indent}    {inner}\n{indent})"
+        else:
+            field = node.get('field_name', '')
+            op = node.get('operator', '')
+            val = node.get('node_value', '')
+            return f"{indent}{field} {op} {val}"
+
+    def flatten_ast(node):
+        res = [{k: v for k, v in node.items() if k != 'children'}]
+        for c in node.get('children', []):
+            res.extend(flatten_ast(c))
+        return res
 
     for root in ast_forest:
-        with st.expander(f"Rule ID: {str(root['id'])[:8]}...", expanded=False):
-            st.markdown("### Logic AST")
-            render_tree(root)
+        desc = root.get('description') or 'Rule Logic'
+        title = f"{desc} (ID: {str(root['id'])[:8]})"
+        with st.expander(title, expanded=False):
+            st.markdown("### Formal Logical Expression")
+            expr = ast_to_logical_expression(root)
+            st.code(expr, language="sql")
             
-            st.markdown(f"**Citation Context:** _{root['citation']}_")
+            with st.expander("🛠️ View Raw Flat JSON AST"):
+                # Clean up the output to resemble the original ExtractionResult flat array
+                safe_json = flatten_ast(root)
+                st.json(safe_json)
+            
+            cit = root.get('citation', '')
+            pg = root.get('page_number', '?')
+            ln = root.get('line_number', '?')
+            st.markdown(f"**Citation Location:** Page {pg}, Line ~{ln}  \n**Context:** _{cit}_")
             
             # Button to highlight this rule
             if st.button("Highlight Rule", key=f"btn_{root['id']}"):
@@ -239,8 +294,15 @@ with col2:
     citations.sort(key=len, reverse=True)
     
     for cit in citations:
-        esc_cit = html.escape(cit)
-        if esc_cit and esc_cit.strip():
+        if cit and cit.strip():
+            words = cit.split()
+            if not words: continue
+            
+            # Escape HTML to match escaped_text, then build a regex pattern 
+            # to tolerate newlines and spaces separating the words in the raw PDF text
+            escaped_words = [re.escape(html.escape(w)) for w in words]
+            pattern_str = r'\s+'.join(escaped_words)
+            
             if st.session_state.selected_citation == cit:
                 # Highlight strongly if it is the selected citation
                 bg = "#FFECA1" # Anthropic-like soft yellow
@@ -248,12 +310,14 @@ with col2:
             else:
                 # Highlight subtly for other rules
                 bg = "#F0F0F0"
-                border = "border: 1px clear;"
+                border = "border: 1px solid transparent;"
                 
-            escaped_text = escaped_text.replace(
-                esc_cit, 
-                f'<mark style="background-color: {bg}; color: inherit; padding: 2px 4px; border-radius: 4px; {border}">{esc_cit}</mark>'
-            )
+            try:
+                pattern = re.compile(pattern_str, re.IGNORECASE)
+                repl = f'<mark style="background-color: {bg}; color: inherit; padding: 2px 4px; border-radius: 4px; {border}">\g<0></mark>'
+                escaped_text = pattern.sub(repl, escaped_text)
+            except Exception as e:
+                pass
             
     st.markdown(f"<div class='source-doc'>{escaped_text}</div>", unsafe_allow_html=True)
 
