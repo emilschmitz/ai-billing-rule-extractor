@@ -1,6 +1,6 @@
-# AI Billing Rule Extraction Pipeline:
+# AI Billing Rule Extraction Pipeline 🩺
 
-Extracts medical billing rules in formal, machine-usable form from PDFs, such as the NCCI policy 📖
+Extracts medical billing rules in formal, machine-usable form from PDFs, such as the NCCI policy.
 
 Proof of Concept, code is messy.
 
