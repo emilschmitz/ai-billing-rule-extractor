@@ -19,7 +19,7 @@ docker-compose up -d
 Then, launch the frontend:
 
 ```bash
-uv run streamlit run frontend.py
+uv run --env-file .env streamlit run frontend.py --browser.gatherUsageStats false --server.headless true
 ```
 
 You can either upload PDFs in the frontend, or use the preconfigured NCCI ones. Then click "Run Extraction Analysis" to trigger the pipeline.
@@ -28,11 +28,13 @@ You can either upload PDFs in the frontend, or use the preconfigured NCCI ones. 
 
 1. Extraction: Parse the PDF into raw text (no AI/OCR needed for NCCI, but could be nice addition for more complex documents).
 2. Use LLM with constrained generation to generate a flattened JSON AST. (Flattened representation avoids generation errors common with complex/recursive schemas).
-3. Transform the generated flat-AST into a more standard (recursive) format and display it to the user. 
+3. Transform the generated flat-AST into a more standard (recursive) format and display it to the user.
 
 The rules are displayed next to the PDF and extracted text in the frontend for easy human review.
 
 ## Improvements
+
+The LLM calls could be easily parallelized with async, speeding up processing.
 
 Currently, the system sometimes extracts text descriptions (e.g., "endoscopy") instead of standardized billing codes. To be production-ready, it needs integration with external classification databases e.g. to map procedures to CPT codes and diagnoses to ICD codes.
 
