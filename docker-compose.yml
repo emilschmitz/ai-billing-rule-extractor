@@ -16,21 +16,33 @@ services:
       timeout: 5s
       retries: 5
 
-  fastapi:
+  # rules_engine:
+  #   build:
+  #     context: .
+  #     dockerfile: rules_engine/Dockerfile
+  #   environment:
+  #     - DATABASE_URL=postgresql+asyncpg://validator:password@postgres:5432/rules_db
+  #     - SYNC_DATABASE_URL=postgresql://validator:password@postgres:5432/rules_db
+  #   ports:
+  #     - "8000:8000"
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
+  rules_extractor:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: rules_extractor/Dockerfile
+    env_file:
+      - .env
     environment:
       - DATABASE_URL=postgresql+asyncpg://validator:password@postgres:5432/rules_db
       - SYNC_DATABASE_URL=postgresql://validator:password@postgres:5432/rules_db
     ports:
-      - "8000:8000"
+      - "8501:8501"
     depends_on:
       postgres:
         condition: service_healthy
-
-  # Not containerizing streamlit or pipeline run, assuming they are run by user with `uv run` as per constraints
-  # wait, user constraint: "Provide a complete `docker-compose.yml` for Postgres and the FastAPI app, including table init scripts."
 
 volumes:
   db_data:

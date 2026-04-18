@@ -10,19 +10,19 @@ https://github.com/user-attachments/assets/acb183ed-5907-4d53-bbaf-df24d6304520
 
 ## Run
 
-Start Postgres (used for saving extracted rules):
+First, copy `.env.sample` to `.env` and fill in your OpenAI API key:
 
 ```bash
-docker-compose up -d
+cp .env.sample .env
 ```
 
-Then, launch the frontend:
+Then, you can start the application (database and rules extractor UI) with Docker Compose:
 
 ```bash
-uv run --env-file .env streamlit run frontend.py --browser.gatherUsageStats false --server.headless true
+docker compose up
 ```
 
-You can either upload PDFs in the frontend, or use the preconfigured NCCI ones. Then click "Run Extraction Analysis" to trigger the pipeline.
+The rules extractor will be available at `http://localhost:8501`. You can either upload PDFs in the UI, or use the preconfigured NCCI ones. Then click "Run Extraction Analysis" to trigger the pipeline.
 
 ## Pipeline Steps
 
@@ -30,7 +30,7 @@ You can either upload PDFs in the frontend, or use the preconfigured NCCI ones. 
 2. Use LLM with constrained generation to generate a flattened JSON AST. (Flattened representation avoids generation errors common with complex/recursive schemas).
 3. Transform the generated flat-AST into a more standard (recursive) format and display it to the user.
 
-The rules are displayed next to the PDF and extracted text in the frontend for easy human review.
+The rules are displayed next to the PDF and extracted text in the rules extractor UI for easy human review.
 
 ## Improvements
 

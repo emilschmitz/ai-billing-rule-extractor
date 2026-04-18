@@ -145,8 +145,8 @@ if selected_pdf:
 else:
     pdf_source = None
 
-start_page = st.sidebar.number_input("Start Page", min_value=1, value=1)
-end_page = st.sidebar.number_input("End Page", min_value=1, value=10)
+start_page = st.sidebar.number_input("Start Page", min_value=1, value=20)
+end_page = st.sidebar.number_input("End Page", min_value=1, value=30)
 chunk_size = st.sidebar.number_input("Analysis Chunk Size (pages)", min_value=1, value=3)
 overlap = st.sidebar.number_input("Overlap Pages", min_value=0, value=1)
 

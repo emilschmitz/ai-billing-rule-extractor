@@ -11,7 +11,9 @@ COPY pyproject.toml uv.lock ./
 # Fast install
 RUN uv sync --frozen
 
-# Copy source
-COPY main.py ./
+# Copy source and data
+COPY rules_extractor/ ./
+COPY data/ ./data/
+COPY .streamlit/ ./.streamlit/
 
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "streamlit", "run", "frontend.py", "--browser.gatherUsageStats", "false", "--server.headless", "true"]
