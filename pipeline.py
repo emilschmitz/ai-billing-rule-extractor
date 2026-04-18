@@ -8,7 +8,8 @@ from bs4 import BeautifulSoup
 import pypdf
 from typing import List, Literal, Optional, Union
 from pydantic import BaseModel, Field
-from openai import OpenAI
+import asyncio
+from openai import AsyncOpenAI
 from sqlalchemy import create_engine, text
 
 # Database setup
@@ -16,7 +17,7 @@ DB_URL = "postgresql+psycopg://validator:password@localhost:5432/rules_db"
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # OpenAI setup
-client = OpenAI()
+aclient = AsyncOpenAI()
 
 def read_pdf_pages(file_or_bytes, start_page=1, end_page=None) -> List[dict]:
     print("Reading PDF pages...")
@@ -128,9 +129,9 @@ AST:
 ]
 """
 
-def extract_rules(chunk: str) -> List[RuleNode]:
+async def extract_rules(chunk: str) -> List[RuleNode]:
     try:
-        response = client.beta.chat.completions.parse(
+        response = await aclient.beta.chat.completions.parse(
             model="gpt-4o-2024-08-06",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -144,7 +145,7 @@ def extract_rules(chunk: str) -> List[RuleNode]:
         print(f"Error extracting rules: {e}")
         return []
 
-def generate_synthetic_data(rule_ast: List[RuleNode]) -> Optional[RuleSyntheticTests]:
+async def generate_synthetic_data(rule_ast: List[RuleNode]) -> Optional[RuleSyntheticTests]:
     schema_prompt = """Generate 10 Synthetic Encounters (5 that pass, 5 that fail) for the given rule AST.
 Mimic the Candid Health Encounter schema:
 {
@@ -155,7 +156,7 @@ Mimic the Candid Health Encounter schema:
 }"""
     try:
         ast_json = json.dumps([r.model_dump() for r in rule_ast], indent=2)
-        response = client.beta.chat.completions.parse(
+        response = await aclient.beta.chat.completions.parse(
             model="gpt-4o-2024-08-06",
             messages=[
                 {"role": "system", "content": schema_prompt},
@@ -174,21 +175,12 @@ def clear_database():
         print("Clearing existing data...")
         conn.execute(text("TRUNCATE TABLE test_encounters, rule_nodes CASCADE;"))
 
-def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_callback=None, run_name="Default Run"):
-    chunks = chunk_pages_text(pages, chunk_size=chunk_size, overlap=overlap)
-
-    for i, chunk in enumerate(chunks):
-        if not chunk.strip(): continue
-        
-        chunk_msg = f"Processing chunk {i+1}/{len(chunks)}..."
-        print(f"\n{chunk_msg}")
-        if progress_callback:
-            progress_callback(i, len(chunks), chunk_msg)
-            
-        rules = extract_rules(chunk)
+async def process_all_chunks(chunks, run_name, progress_callback):
+    async def process_chunk(i, chunk):
+        if not chunk.strip(): return None
+        rules = await extract_rules(chunk)
         if not rules:
-            print("No rules extracted for this chunk.")
-            continue
+            return None
         
         # Remap IDs to valid UUIDs to avoid PostgreSQL DataError
         id_map = {}
@@ -201,13 +193,36 @@ def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_
             if node.parent_id in id_map:
                 node.parent_id = id_map[node.parent_id]
         
-        print(f"Extracted {len(rules)} nodes. Generating synthetic data...")
-        
-        # We group roots. Normally a chunk might have multiple disconnected roots.
-        # This simple pipeline links synthetic tests to root nodes of the rules extracted.
         roots = [r for r in rules if r.parent_id is None]
-        
-        tests = generate_synthetic_data(rules)
+        tests = await generate_synthetic_data(rules)
+        return (rules, roots, tests)
+
+    tasks = [asyncio.create_task(process_chunk(i, chunk)) for i, chunk in enumerate(chunks)]
+    results = []
+    completed = 0
+    total = len(chunks)
+    
+    for future in asyncio.as_completed(tasks):
+        res = await future
+        completed += 1
+        chunk_msg = f"Processed chunk {completed}/{total}..."
+        print(f"\n{chunk_msg}")
+        if progress_callback:
+            progress_callback(completed, total, chunk_msg)
+        if res is not None:
+            results.append(res)
+            
+    return results
+
+def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_callback=None, run_name="Default Run"):
+    chunks = chunk_pages_text(pages, chunk_size=chunk_size, overlap=overlap)
+
+    if progress_callback:
+        progress_callback(0, len(chunks), "Starting extraction...")
+
+    results = asyncio.run(process_all_chunks(chunks, run_name, progress_callback))
+    
+    for rules, roots, tests in results:
         
         print("Saving to database...")
         with engine.begin() as conn:

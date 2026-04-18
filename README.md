@@ -34,11 +34,9 @@ The rules are displayed next to the PDF and extracted text in the frontend for e
 
 ## Improvements
 
-The LLM calls could be easily parallelized with async, speeding up processing.
-
 Currently, the system sometimes extracts text descriptions (e.g., "endoscopy") instead of standardized billing codes. To be production-ready, it needs integration with external classification databases e.g. to map procedures to CPT codes and diagnoses to ICD codes.
 
-That would be well-suited for an agentic setup with MCP, allowing an extraction agent to decide when to look things up.
+That task might be well-suited for an agentic setup with a web-search MCP, giving an extraction agent the discretion to look up codes when needed and edit the rules accordingly.
 
 ## Rules Engine
 
