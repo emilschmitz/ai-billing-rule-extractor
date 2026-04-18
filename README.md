@@ -10,11 +10,7 @@ https://github.com/user-attachments/assets/acb183ed-5907-4d53-bbaf-df24d6304520
 
 ## Run
 
-First, copy `.env.sample` to `.env` and fill in your OpenAI API key:
-
-```bash
-cp .env.sample .env
-```
+You'll need an OpenAI API key: Copy `.env.sample` to a new file called `.env` and fill it in.
 
 Then, you can start the application (database and rules extractor UI) with Docker Compose:
 
