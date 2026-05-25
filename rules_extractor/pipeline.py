@@ -13,7 +13,9 @@ from openai import AsyncOpenAI
 from sqlalchemy import create_engine, text
 
 # Database setup
-DB_URL = "postgresql+psycopg://validator:password@localhost:5432/rules_db"
+DB_URL = os.getenv("SYNC_DATABASE_URL", "postgresql+psycopg://validator:password@localhost:5432/rules_db")
+if DB_URL.startswith("postgresql://"):
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # OpenAI setup
@@ -72,11 +74,22 @@ class RuleNode(BaseModel):
 class ExtractionResult(BaseModel):
     rules: List[RuleNode]
 
+class Patient(BaseModel):
+    first_name: str = "John"
+    last_name: str = "Doe"
+
+class Diagnosis(BaseModel):
+    code: str
+
+class ServiceLine(BaseModel):
+    procedure_code: str
+    modifiers: List[str]
+
 class SyntheticEncounter(BaseModel):
-    patient: dict = Field(default_factory=dict)
+    patient: Patient = Field(default_factory=Patient)
     place_of_service_code: str
-    diagnoses: List[dict]
-    service_lines: List[dict]
+    diagnoses: List[Diagnosis]
+    service_lines: List[ServiceLine]
 
 class RuleSyntheticTests(BaseModel):
     passes: List[SyntheticEncounter] = Field(description="5 encounters that pass the rule")
@@ -146,10 +159,11 @@ async def extract_rules(chunk: str) -> List[RuleNode]:
         return []
 
 async def generate_synthetic_data(rule_ast: List[RuleNode]) -> Optional[RuleSyntheticTests]:
-    schema_prompt = """Generate 10 Synthetic Encounters (5 that pass, 5 that fail) for the given rule AST.
+    schema_prompt = """Generate 4 simple Synthetic Encounters (2 that pass, 2 that fail) for the given rule AST.
+Keep the generated encounters extremely minimal: only include the specific fields necessary to test the rule.
 Mimic the Candid Health Encounter schema:
 {
-  "patient": {},
+  "patient": {"first_name": "string", "last_name": "string"},
   "place_of_service_code": "str",
   "diagnoses": [{"code": "str"}],
   "service_lines": [{"procedure_code": "str", "modifiers": ["str"]}]
@@ -264,8 +278,8 @@ def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_
 def main():
     print("Starting Pipeline...")
     clear_database()
-    # Use 2026 manual by default
-    pages = read_pdf_pages("data/2026_ncci_medicare_policy_manual_all-chapters.pdf", start_page=1, end_page=10)
+    # Use dental policy manual by default
+    pages = read_pdf_pages("data/dental_policy_and_procedure_manual.pdf", start_page=1, end_page=10)
     run_pipeline_for_pages(pages, chunk_size=3, overlap=1)
     print("\nPipeline Complete!")
 

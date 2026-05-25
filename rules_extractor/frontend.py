@@ -79,7 +79,7 @@ button[title="View fullscreen"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("RCM Encounter Validation")
+st.title("Billing Rule Extractor")
 
 DB_URL = "postgresql+psycopg://validator:password@localhost:5432/rules_db"
 
@@ -328,5 +328,7 @@ with col3:
     
     if pdf_source:
         pdf_viewer(pdf_source, width="100%", height=800)
+    else:
+        st.info("No PDF selected to display.")
     else:
         st.info("No PDF selected to display.")
