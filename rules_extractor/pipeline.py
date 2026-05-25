@@ -18,8 +18,24 @@ if DB_URL.startswith("postgresql://"):
     DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
-# OpenAI setup
-aclient = AsyncOpenAI()
+# OpenAI / OpenRouter client setup
+openrouter_key = os.getenv("OPENROUTER_API_KEY")
+EXTRA_PARAMS = {}
+if openrouter_key:
+    print("Using OpenRouter client with Gemini 3.5 Flash")
+    aclient = AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=openrouter_key
+    )
+    MODEL_NAME = os.getenv("MODEL_NAME", "google/gemini-3.5-flash")
+    EXTRA_PARAMS["extra_body"] = {
+        "reasoning": {
+            "effort": "low"
+        }
+    }
+else:
+    aclient = AsyncOpenAI()
+    MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-2024-08-06")
 
 def read_pdf_pages(file_or_bytes, start_page=1, end_page=None) -> List[dict]:
     print("Reading PDF pages...")
@@ -145,13 +161,14 @@ AST:
 async def extract_rules(chunk: str) -> List[RuleNode]:
     try:
         response = await aclient.beta.chat.completions.parse(
-            model="gpt-4o-2024-08-06",
+            model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": f"Extract rules from this chunk. Remember citation MUST be an exact substring:\n\n{chunk}"}
             ],
             response_format=ExtractionResult,
-            temperature=0.0
+            temperature=0.0,
+            **EXTRA_PARAMS
         )
         return response.choices[0].message.parsed.rules
     except Exception as e:
@@ -171,13 +188,14 @@ Mimic the Candid Health Encounter schema:
     try:
         ast_json = json.dumps([r.model_dump() for r in rule_ast], indent=2)
         response = await aclient.beta.chat.completions.parse(
-            model="gpt-4o-2024-08-06",
+            model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": schema_prompt},
                 {"role": "user", "content": f"Generate tests for this AST rule:\n{ast_json}"}
             ],
             response_format=RuleSyntheticTests,
-            temperature=0.3
+            temperature=0.3,
+            **EXTRA_PARAMS
         )
         return response.choices[0].message.parsed
     except Exception as e:
@@ -208,8 +226,29 @@ async def process_all_chunks(chunks, run_name, progress_callback):
                 node.parent_id = id_map[node.parent_id]
         
         roots = [r for r in rules if r.parent_id is None]
-        tests = await generate_synthetic_data(rules)
-        return (rules, roots, tests)
+        
+        # Concurrently generate tests for each independent rule tree
+        async def get_tree_and_tests(root):
+            tree_nodes = [root]
+            parent_ids = {root.id}
+            added = True
+            while added:
+                added = False
+                for node in rules:
+                    if node.parent_id in parent_ids and node not in tree_nodes:
+                        tree_nodes.append(node)
+                        parent_ids.add(node.id)
+                        added = True
+            
+            # Generate tests specifically for this tree
+            if os.getenv("DISABLE_TEST_GENERATION", "false").lower() == "true":
+                tests = None
+            else:
+                tests = await generate_synthetic_data(tree_nodes)
+            return (tree_nodes, root, tests)
+            
+        tree_results = await asyncio.gather(*(get_tree_and_tests(r) for r in roots))
+        return tree_results
 
     tasks = [asyncio.create_task(process_chunk(i, chunk)) for i, chunk in enumerate(chunks)]
     results = []
@@ -236,44 +275,45 @@ def run_pipeline_for_pages(pages: List[dict], chunk_size=3, overlap=1, progress_
 
     results = asyncio.run(process_all_chunks(chunks, run_name, progress_callback))
     
-    for rules, roots, tests in results:
+    for chunk_res in results:
+        if not chunk_res: continue
         
         print("Saving to database...")
         with engine.begin() as conn:
-            # Insert nodes
-            for node in rules:
-                val = json.dumps(node.value) if isinstance(node.value, list) else json.dumps(node.value)
-                query = text("""
-                    INSERT INTO rule_nodes (id, parent_id, node_type, field_name, operator, node_value, citation, description, page_number, line_number, run_name)
-                    VALUES (:id, :parent_id, :node_type, :field_name, :operator, :node_value, :citation, :description, :page_number, :line_number, :run_name)
-                """)
-                conn.execute(query, {
-                    "id": node.id,
-                    "parent_id": node.parent_id,
-                    "node_type": node.type,
-                    "field_name": node.field,
-                    "operator": node.operator,
-                    "node_value": val,
-                    "citation": node.citation,
-                    "description": node.description,
-                    "page_number": node.page_number,
-                    "line_number": node.line_number,
-                    "run_name": run_name
-                })
-            
-            # Insert tests targeted at the first root of the chunk
-            if tests and roots:
-                target_rule_id = roots[0].id
-                for t in tests.passes:
-                    conn.execute(text("""
-                        INSERT INTO test_encounters (encounter_json, target_rule_id, expected_to_pass, run_name)
-                        VALUES (:json, :rule_id, TRUE, :run_name)
-                    """), {"json": json.dumps(t.model_dump()), "rule_id": target_rule_id, "run_name": run_name})
-                for t in tests.fails:
-                    conn.execute(text("""
-                        INSERT INTO test_encounters (encounter_json, target_rule_id, expected_to_pass, run_name)
-                        VALUES (:json, :rule_id, FALSE, :run_name)
-                    """), {"json": json.dumps(t.model_dump()), "rule_id": target_rule_id, "run_name": run_name})
+            for tree_nodes, root, tests in chunk_res:
+                # Insert nodes belonging to this rule tree
+                for node in tree_nodes:
+                    val = json.dumps(node.value) if isinstance(node.value, list) else json.dumps(node.value)
+                    query = text("""
+                        INSERT INTO rule_nodes (id, parent_id, node_type, field_name, operator, node_value, citation, description, page_number, line_number, run_name)
+                        VALUES (:id, :parent_id, :node_type, :field_name, :operator, :node_value, :citation, :description, :page_number, :line_number, :run_name)
+                    """)
+                    conn.execute(query, {
+                        "id": node.id,
+                        "parent_id": node.parent_id,
+                        "node_type": node.type,
+                        "field_name": node.field,
+                        "operator": node.operator,
+                        "node_value": val,
+                        "citation": node.citation,
+                        "description": node.description,
+                        "page_number": node.page_number,
+                        "line_number": node.line_number,
+                        "run_name": run_name
+                    })
+                
+                # Insert tests targeted at this root node
+                if tests:
+                    for t in tests.passes:
+                        conn.execute(text("""
+                            INSERT INTO test_encounters (encounter_json, target_rule_id, expected_to_pass, run_name)
+                            VALUES (:json, :rule_id, TRUE, :run_name)
+                        """), {"json": json.dumps(t.model_dump()), "rule_id": root.id, "run_name": run_name})
+                    for t in tests.fails:
+                        conn.execute(text("""
+                            INSERT INTO test_encounters (encounter_json, target_rule_id, expected_to_pass, run_name)
+                            VALUES (:json, :rule_id, FALSE, :run_name)
+                        """), {"json": json.dumps(t.model_dump()), "rule_id": root.id, "run_name": run_name})
 
 def main():
     print("Starting Pipeline...")

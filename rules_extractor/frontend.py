@@ -81,7 +81,9 @@ button[title="View fullscreen"] {
 
 st.title("Billing Rule Extractor")
 
-DB_URL = "postgresql+psycopg://validator:password@localhost:5432/rules_db"
+DB_URL = os.getenv("SYNC_DATABASE_URL", "postgresql+psycopg://validator:password@localhost:5432/rules_db")
+if DB_URL.startswith("postgresql://"):
+    DB_URL = DB_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
 @st.cache_resource
 def get_db_engine():
@@ -135,8 +137,9 @@ if uploaded_file:
 available_pdfs = [f for f in os.listdir("data") if f.endswith(".pdf")]
 default_index = 0
 for i, f in enumerate(available_pdfs):
-    if "2026_ncci" in f:
+    if "dental_policy" in f:
         default_index = i
+        break
 
 selected_pdf = st.sidebar.selectbox("Select PDF Document", available_pdfs, index=default_index)
 
@@ -145,8 +148,8 @@ if selected_pdf:
 else:
     pdf_source = None
 
-start_page = st.sidebar.number_input("Start Page", min_value=1, value=20)
-end_page = st.sidebar.number_input("End Page", min_value=1, value=30)
+start_page = st.sidebar.number_input("Start Page", min_value=1, value=1)
+end_page = st.sidebar.number_input("End Page", min_value=1, value=35)
 chunk_size = st.sidebar.number_input("Analysis Chunk Size (pages)", min_value=1, value=3)
 overlap = st.sidebar.number_input("Overlap Pages", min_value=0, value=1)
 
@@ -324,11 +327,9 @@ with col2:
 # Column 3: The PDF File Viewer
 with col3:
     st.header("Source PDF")
-    st.caption("Native viewer")
+    # st.caption("Native viewer")
     
     if pdf_source:
-        pdf_viewer(pdf_source, width="100%", height=800)
-    else:
-        st.info("No PDF selected to display.")
+        pdf_viewer(pdf_source, width="100%", height=800, scroll_to_page=start_page)
     else:
         st.info("No PDF selected to display.")
